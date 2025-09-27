@@ -71,10 +71,20 @@ python Server/Sql/vanilla/tools/vanilla_item_tool.py boss assign \
 
 # Export both the item and the assignment into SQL
 python Server/Sql/vanilla/tools/vanilla_item_tool.py sql --output custom.sql
+
+# Apply the SQL directly to your Vanilla world database
+python Server/Sql/vanilla/tools/vanilla_item_tool.py sql --apply \
+  --db-user root --db-password 123456 --db-name mangos0 \
+  --items 60000 --bosses 11502
 ```
 
 Run `python Server/Sql/vanilla/tools/vanilla_item_tool.py --help` for the full
 command reference (including listing, deleting and exporting specific entries).
+
+When using `--apply` you can either pass the credentials explicitly (as in the
+example above) or point the tool at an existing MySQL option file (for example
+`Server/Database/connection.cnf`) with `--db-config`. Values provided on the
+command line override entries from the option file.
 # Shutting down
  - **DO NOT** close anything by pressing [X] "close" button in the upper-right corner. I'm serious!
  - Open the window with Expansion menu and choose "0 - Shutdown all servers" option. It will close everything automatically.

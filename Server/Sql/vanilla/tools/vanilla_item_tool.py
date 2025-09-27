@@ -9,13 +9,23 @@ custom items for the `item_template` table, assigning them to bosses via the
 from __future__ import annotations
 
 import argparse
+import configparser
 import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 STORE_PATH = Path(__file__).with_name("vanilla_item_store.json")
+
+
+@dataclass
+class DatabaseConfig:
+    host: str
+    port: int
+    user: str
+    password: str
+    database: str
 
 
 ITEM_TEMPLATE_COLUMNS: Tuple[str, ...] = (
@@ -325,6 +335,54 @@ def save_store(store: Dict[str, object]) -> None:
         json.dump(store, handle, indent=2, sort_keys=True)
 
 
+def parse_mysql_option_file(path: Path) -> Dict[str, str]:
+    parser = configparser.RawConfigParser()
+    parser.optionxform = str  # keep original case for compatibility
+    content = path.read_text(encoding="utf-8")
+    first_line = next((line for line in content.splitlines() if line.strip()), "")
+    if not first_line.startswith("["):
+        content = "[client]\n" + content
+    parser.read_string(content)
+    if not parser.has_section("client"):
+        raise SystemExit(f"MySQL option file {path} does not contain a [client] section")
+    return {key.lower(): value for key, value in parser.items("client")}
+
+
+def resolve_db_config(args: argparse.Namespace) -> Optional[DatabaseConfig]:
+    if not getattr(args, "apply", False):
+        return None
+
+    option_file_values: Dict[str, str] = {}
+    if getattr(args, "db_config", None):
+        option_path = Path(args.db_config)
+        if not option_path.exists():
+            raise SystemExit(f"MySQL option file not found: {option_path}")
+        option_file_values = parse_mysql_option_file(option_path)
+
+    def _get_option(name: str, cli_value: Optional[str], default: Optional[str] = None) -> Optional[str]:
+        if cli_value:
+            return cli_value
+        return option_file_values.get(name, default)
+
+    host = _get_option("host", getattr(args, "db_host", None), "localhost")
+    port_raw = _get_option("port", getattr(args, "db_port", None), "3306")
+    user = _get_option("user", getattr(args, "db_user", None), None)
+    password = _get_option("password", getattr(args, "db_password", None), "")
+    database = _get_option("database", getattr(args, "db_name", None), None)
+    if user is None:
+        raise SystemExit("Database user is required when using --apply. Provide --db-user or configure it in the option file.")
+    if database is None:
+        raise SystemExit(
+            "Database name is required when using --apply. Provide --db-name or configure it in the option file."
+        )
+    try:
+        port = int(port_raw) if port_raw else 3306
+    except ValueError as exc:
+        raise SystemExit(f"Invalid MySQL port '{port_raw}'") from exc
+
+    return DatabaseConfig(host=host, port=port, user=user, password=password or "", database=database)
+
+
 def _auto_type(column: str, value: str) -> object:
     if column in {"name", "description", "ScriptName", "comments"}:
         return value
@@ -554,6 +612,41 @@ def generate_loot_sql(bosses: Iterable[int]) -> List[str]:
     return [CreatureLoot(row).to_sql() for row in selected]
 
 
+def apply_sql_statements(statements: List[str], db_config: DatabaseConfig) -> None:
+    if not statements:
+        print("No SQL statements to apply.")
+        return
+
+    import mysql.connector
+
+    try:
+        connection = mysql.connector.connect(
+            host=db_config.host,
+            port=db_config.port,
+            user=db_config.user,
+            password=db_config.password,
+            database=db_config.database,
+        )
+    except mysql.connector.Error as exc:  # type: ignore[attr-defined]
+        raise SystemExit(f"Failed to connect to MySQL: {exc}") from exc
+
+    try:
+        cursor = connection.cursor()
+        try:
+            for statement in statements:
+                cursor.execute(statement)
+        except mysql.connector.Error as exc:  # type: ignore[attr-defined]
+            connection.rollback()
+            raise SystemExit(f"Failed to execute SQL statement: {exc}") from exc
+        else:
+            connection.commit()
+            print(f"Applied {len(statements)} SQL statements to {db_config.database}")
+        finally:
+            cursor.close()
+    finally:
+        connection.close()
+
+
 def handle_sql(args: argparse.Namespace) -> None:
     item_entries = [int(entry) for entry in args.items or []]
     boss_entries = [int(entry) for entry in args.bosses or []]
@@ -568,9 +661,19 @@ def handle_sql(args: argparse.Namespace) -> None:
     else:
         print(output)
 
+    db_config = resolve_db_config(args)
+    if db_config:
+        apply_sql_statements(statements, db_config)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--db-config", help="Path to a MySQL option file (e.g. connection.cnf)")
+    parser.add_argument("--db-host", dest="db_host", help="MySQL host")
+    parser.add_argument("--db-port", dest="db_port", help="MySQL port")
+    parser.add_argument("--db-user", dest="db_user", help="MySQL user")
+    parser.add_argument("--db-password", dest="db_password", help="MySQL password")
+    parser.add_argument("--db-name", dest="db_name", help="MySQL database name")
     sub = parser.add_subparsers(dest="command", required=True)
 
     create = sub.add_parser("item", help="Manage custom items")
@@ -635,6 +738,7 @@ def build_parser() -> argparse.ArgumentParser:
     sql.add_argument("--items", nargs="*", help="Specific item entries to export")
     sql.add_argument("--bosses", nargs="*", help="Specific boss entries to export")
     sql.add_argument("--output", help="Write SQL to file instead of stdout")
+    sql.add_argument("--apply", action="store_true", help="Execute the generated SQL statements against the database")
     sql.set_defaults(func=handle_sql)
 
     return parser
