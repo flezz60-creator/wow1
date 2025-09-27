@@ -40,10 +40,41 @@
 # Importing save from old SPP Classics repack (v1 2020 edition)
  - Follow this [guide](https://github.com/celguar/spp-classics/wiki/Importing-from-old-SPP-Classics-repack)
 # Starting server
- - To start server, choose "Start Servers (Win64)" and wait for it to load.
- - It will take longer to boot for the first time, because random bot characters will be created. 
- - To create an account, choose option in the menu and follow the instructions.
- - To log in - edit realmlist.wtf file - "set realmlist 127.0.0.1"
+- To start server, choose "Start Servers (Win64)" and wait for it to load.
+- It will take longer to boot for the first time, because random bot characters will be created.
+- To create an account, choose option in the menu and follow the instructions.
+- To log in - edit realmlist.wtf file - "set realmlist 127.0.0.1"
+
+## Custom Vanilla items and boss loot
+
+Inside `Server/Sql/vanilla/tools` you can find a helper script called
+`vanilla_item_tool.py`. It allows you to describe custom items for the Vanilla
+`item_template` table, assign them to bosses (entries in
+`creature_loot_template`) and export ready-to-run SQL statements. The script
+keeps a small JSON store next to it so you can iteratively tweak your items.
+
+Example workflow:
+
+```bash
+# Create a new sword
+python Server/Sql/vanilla/tools/vanilla_item_tool.py item create \
+  --entry 60000 --name "Berserker's Edge" --class 2 --subclass 8 \
+  --quality 4 --display-id 12345 --inventory-type 17 \
+  --item-level 80 --required-level 60 \
+  --stats strength=30 stamina=20 \
+  --damage 1:150:250:physical --description "Forged for champions"
+
+# Assign it to a boss (e.g. Ragnaros entry 11502)
+python Server/Sql/vanilla/tools/vanilla_item_tool.py boss assign \
+  --boss 11502 --item 60000 --chance 15 --min 1 --max 1 \
+  --comment "Custom loot"
+
+# Export both the item and the assignment into SQL
+python Server/Sql/vanilla/tools/vanilla_item_tool.py sql --output custom.sql
+```
+
+Run `python Server/Sql/vanilla/tools/vanilla_item_tool.py --help` for the full
+command reference (including listing, deleting and exporting specific entries).
 # Shutting down
  - **DO NOT** close anything by pressing [X] "close" button in the upper-right corner. I'm serious!
  - Open the window with Expansion menu and choose "0 - Shutdown all servers" option. It will close everything automatically.
